@@ -14,6 +14,7 @@ defmodule Plug.Oz.Reissue do
     options = %{ticket: options |> Map.get(:payload, %{}) |> Map.take([:issue_to, :scope])}
               |> Deep.merge(options)
               |> Map.merge(%{check_expiration: false})
+              |> Map.delete(:payload)
 
     conn
     |> Hawk.Request.new()
@@ -39,29 +40,37 @@ defmodule Plug.Oz.Reissue do
   end
 
   defp validate_app({:error, reason}, _options), do: {:error, reason}
-  defp validate_app({:ok, %{ticket: %{app: app}}} = ok, %{load_app_fn: load_app_fn} = options) when is_function(load_app_fn) do
-    validate_app(ok, load_app_fn.(app), options)
+  defp validate_app({:ok, %{ticket: %{app: app}} = result}, %{config: config} = options) do
+    app
+    |> config.get_app()
+    |> validate_app(result, config, options)
   end
-  defp validate_app({:ok, %{ticket: _ticket}}, app, %{payload: %{issue_to: issue_to}}) when is_binary(issue_to) and not :erlang.is_map_key(:delegate, app) do
+
+  defp validate_app(app, %{ticket: _ticket}, _config, %{ticket: %{issue_to: issue_to}}) when is_binary(issue_to) and not :erlang.is_map_key(:delegate, app) do
     {:error, {401, "Application has no delegation rights", Hawk.Header.error("Application has no delegation rights")}}
   end
-  defp validate_app({:ok, %{ticket: %{algorithm: _, id: _, key: _, scope: _, grant: grant} = ticket} = result}, %{algorithm: _, id: _, key: _}, %{encryption_password: password, load_grant_fn: load_grant_fn} = options) when is_function(load_grant_fn) do
+  defp validate_app(%{algorithm: _, id: _, key: _}, %{ticket: %{algorithm: _, id: _, key: _, scope: _, grant: grant} = ticket} = result, config, %{encryption_password: password} = options) do
     grant
-    |> load_grant_fn.()
+    |> config.get_grant()
     |> validate_ticket_grant(ticket, Hawk.Now.msec())
     |> case do
-         {:error, reason} -> {:error, reason}
+         {:error, reason} ->
+          {:error, reason}
 
-         %{grant: grant}  ->
-           {:ok, %{result | ticket: Oz.Ticket.reissue(ticket, grant, password, Map.merge(options[:ticket], Map.take(grant, [:ext])))}}
+         {:ok, %{grant: grant, ext: ext}} ->
+           {:ok, %{result | ticket: Oz.Ticket.reissue(ticket, grant, password, Map.merge(options[:ticket], %{ext: ext}))}}
        end
   end
-  defp validate_app({:ok, %{ticket: %{algorithm: _, id: _, key: _, scope: _} = ticket} = result}, %{algorithm: _, id: _, key: _}, options) do
-    {:ok, %{result | ticket: Oz.Ticket.reissue(ticket, options[:encryption_password], options[:ticket])}}
+  defp validate_app(%{algorithm: _, id: _, key: _}, %{ticket: %{algorithm: _, id: _, key: _, scope: _} = ticket} = result, _config, %{encryption_password: password} = options) do
+    {:ok, %{result | ticket: Oz.Ticket.reissue(ticket, password, options[:ticket])}}
   end
-  defp validate_app(_ticket, _app, _options), do: {:error, {401, "Invalid application", Hawk.Header.error("Invalid application")}}
+  defp validate_app(_app, _ticket, _config, _options), do: {:error, {401, "Invalid application", Hawk.Header.error("Invalid application")}}
 
   defp validate_ticket_grant(%{grant: %{app: app, user: user, exp: exp}}, %{app: app, dlg: app, user: user}, now) when exp <= now, do: {:error, {401, "Invalid grant", Hawk.Header.error("Invalid grant")}}
-  defp validate_ticket_grant(grant = %{grant: %{app: app, user: user}}, %{app: app, user: user}, _now), do: grant
+  defp validate_ticket_grant(%{grant: %{app: app, user: user, exp: _exp}, ext: _} = result, %{app: _app, dlg: app, user: user}, _now), do: {:ok, result}
+  defp validate_ticket_grant(%{grant: %{app: app, user: user, exp: _exp}, ext: _} = result, %{app: app, user: user}, _now), do: {:ok, result}
+  defp validate_ticket_grant(%{grant: %{user: _left}}, %{user: _right}, _now), do: {:error, {401, "Invalid grant", Hawk.Header.error("Invalid grant")}}
+  defp validate_ticket_grant(%{grant: %{app: app, exp: _exp}, ext: _} = result, %{app: _app, dlg: app}, _now), do: {:ok, result}
+  defp validate_ticket_grant(%{grant: %{app: app, exp: _exp}, ext: _} = result, %{app: app}, _now), do: {:ok, result}
   defp validate_ticket_grant(_grant, _ticket, _now), do: {:error, {401, "Invalid grant", Hawk.Header.error("Invalid grant")}}
 end

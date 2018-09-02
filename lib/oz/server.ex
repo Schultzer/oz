@@ -7,26 +7,24 @@ defmodule Oz.Server do
   Validate an incoming request
 
   Options
-   * `:ticket`
-   * `:hawk`
+   * See `Hawk.Server.authenticate/3`
+   * `:ticket` any validate option to `Oz.Ticket.parse/2`
   """
   @spec authenticate(Hawk.request(), binary(), keyword() | map()) :: {:ok, %{artifacts: map(), ticket: map()}} | {:error, term()}
   def authenticate(req, password, options \\ %{})
   def authenticate(req, password, options) when is_list(options), do: authenticate(req, password, Map.new(options))
-  # def authenticate(_req, password, _options) when not is_binary(password), do: {:error, "invalid encryption password"}
   def authenticate(req, password, options) when is_binary(password) do
-    options = Map.merge(%{check_expiration: true, ticket: %{}, hawk: %{}}, options)
-    credentials_fn = fn id -> id |> Oz.Ticket.parse(password, options[:ticket]) |> check_expiration(options) end
+    options = Map.merge(%{check_expiration: true, password: password, ticket: %{}}, options)
 
     req
-    |> Hawk.Server.authenticate(credentials_fn, options[:hawk])
+    |> Hawk.Server.authenticate(Oz.Config, options)
     |> validate_app()
     |> validate_dlg()
   end
 
   defp validate_app({:error, reason}), do: {:error, reason}
-  defp validate_app({:ok, %{credentials: %{app: left}, artifacts: %{app: right}}}) when left !== right, do: {:error, {401, "Mismatching application id", Hawk.Header.error("Mismatching application id")}}
-  defp validate_app(ticket), do: ticket
+  defp validate_app({:ok, %{credentials: %{app: app}, artifacts: %{app: app}}} = ok), do: ok
+  defp validate_app(_ticket), do: {:error, {401, "Mismatching application id", Hawk.Header.error("Mismatching application id")}}
 
   defp validate_dlg({:error, reason}), do: {:error, reason}
   defp validate_dlg({:ok, %{credentials: %{dlg: dlg} = ticket, artifacts: %{dlg: dlg} = artifacts}}), do: {:ok, %{ticket: ticket, artifacts: artifacts}}
@@ -40,13 +38,4 @@ defmodule Oz.Server do
       true                                                                  -> {:ok, %{ticket: credentials, artifacts: artifacts}}
     end
   end
-
-  defp check_expiration(%{exp: exp} = ticket, %{check_expiration: true}) do
-    case exp <= Hawk.Now.msec() do
-      true  -> {:error, {401, "Expired ticket", Hawk.Header.error("Expired ticket")}}
-
-      false -> ticket
-    end
-  end
-  defp check_expiration(ticket, _check_expiration), do: ticket
 end

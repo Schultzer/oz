@@ -1,6 +1,6 @@
 defmodule Oz.Client do
   @moduledoc """
-  Documentation for Oz.
+  Documentation for Oz.Client.
   """
 
   defstruct [app_ticket: nil,
@@ -12,7 +12,9 @@ defmodule Oz.Client do
 
   @type t :: %__MODULE__{}
 
-  @doc false
+  @doc """
+  Create a new client.
+  """
   @spec new(binary(), map(), keyword() | map()) :: t()
   def new(uri, credentials, options \\ [])
   def new(uri, %{id: _, algorithm: _, key: _} = credentials, options) when is_binary(uri) do
@@ -20,15 +22,18 @@ defmodule Oz.Client do
   end
 
   @doc """
-  Generate header
+  Generate request header.
   """
-  @spec header(binary() | URI.t(), Hawk.method(), map(), keyword() | map()) :: %{artifacts: map(), header: binary()}
+  @spec header(binary() | URI.t(), :delete | :get | :patch | :post | :put, map(), Hawk.opts()) :: %{artifacts: map(), credentials: map(), header: binary()}
   def header(uri, method, ticket, options \\ %{})
   def header(uri, method, ticket, options) when is_list(options), do: header(uri, method, ticket, Map.new(options))
   def header(uri, method, ticket, options) do
     Hawk.Client.header(uri, method, ticket, Map.merge(options, Map.take(ticket, [:app, :dlg])))
   end
 
+  @doc """
+  Request an app ticket
+  """
   def app(client, path, options \\ %{})
   def app({:error, reason}, _path, _options), do: {:error, reason}
   def app(client, path, options) when is_list(options), do: app(client, path, Map.new(options))
@@ -44,8 +49,8 @@ defmodule Oz.Client do
 
   defp _request_app_ticket(%__MODULE__{credentials: credentials, endpoints: %{app: app}, uri: uri} = client) do
     url = uri <> app
-    %{header: header} = header(url, :post, credentials)
-    case :httpc.request(:post, {[url], [{'authorization', [header]}], [], []}, [], []) do
+    result = header(url, :post, credentials)
+    case :httpc.request(:post, {[url], [{'authorization', [result.header]}], [], []}, [], []) do
       {:ok, {{_, 200, _}, _headers, body}} ->
         app_ticket = Jason.decode!(body, keys: &mixed_keys/1)
         %{client | app_ticket: app_ticket, ticket: app_ticket}
@@ -53,11 +58,13 @@ defmodule Oz.Client do
       {:ok, {{_, _status, _}, _headers, _body}} -> {:error, {500, "Client registration failed with unexpected response"}}
 
       _                                         -> {:error, {500, "Client registration failed with unexpected response"}}
-        # Hawk.InternalServerError.error("Client registration failed with unexpected response", %{status: status, payload: Jason.decode!(body, keys: &mixed_keys/1)})
     end
   end
 
-  @spec reissue(t()) :: t() | no_return()
+  @doc """
+  Reissue a ticket
+  """
+  @spec reissue(t()) :: t() | {:error, {500, binary()}}
   def reissue(%__MODULE__{endpoints: %{reissue: reissue}, uri: uri, ticket: ticket} = client) do
     case do_request(:post, uri <> reissue, ticket, []) do
       %{status: 200, result: reissue} -> %{client | ticket: reissue}
@@ -67,6 +74,7 @@ defmodule Oz.Client do
   end
 
   @doc """
+  Request a ticket
   """
   @spec request(t(), binary(), map() | keyword()) :: t()
   def request(client, path, options \\ %{})
@@ -87,32 +95,36 @@ defmodule Oz.Client do
 
   def do_request(method, url, ticket, payload \\ [])
   def do_request(:post, url, ticket, []) do
-    %{header: header, artifacts: artifacts} = header(url, :post, ticket)
+    result = header(url, :post, ticket)
+
     :post
-    |> :httpc.request({[url], [{'authorization', [header]}], [], []}, [], [])
-    |> handle_resp(ticket, artifacts)
+    |> :httpc.request({[url], [{'authorization', [result.header]}], [], []}, [], [])
+    |> handle_resp(result)
   end
   def do_request(:post, url, ticket, payload) do
-    %{header: header, artifacts: artifacts} = header(url, :post, ticket)
+    result = header(url, :post, ticket)
+
     :post
-    |> :httpc.request({[url], [{'authorization', [header]}], 'application/json', [Jason.encode!(payload)]}, [], [])
-    |> handle_resp(ticket, artifacts)
+    |> :httpc.request({[url], [{'authorization', [result.header]}], 'application/json', [Jason.encode!(payload)]}, [], [])
+    |> handle_resp(result)
   end
   def do_request(method, url, ticket, []) when method in [:get, :delete, :put] do
-    %{header: header, artifacts: artifacts} = header(url, method, ticket)
+    result = header(url, method, ticket)
+
     method
-    |> :httpc.request({[url], [{'authorization', [header]}]}, [], [])
-    |> handle_resp(ticket, artifacts)
+    |> :httpc.request({[url], [{'authorization', [result.header]}]}, [], [])
+    |> handle_resp(result)
   end
   def do_request(method, url, ticket, payload) when method in [:get, :delete, :put] do
-    %{header: header, artifacts: artifacts} = header(url, method, ticket)
+    result = header(url, method, ticket)
+
     method
-    |> :httpc.request({[url], [{'authorization', [header]}], 'application/json', [Jason.encode!(payload)]}, [], [])
-    |> handle_resp(ticket, artifacts)
+    |> :httpc.request({[url], [{'authorization', [result.header]}], 'application/json', [Jason.encode!(payload)]}, [], [])
+    |> handle_resp(result)
   end
 
-  def handle_resp({:ok, {{_, status, _}, headers, body}}, ticket, artifacts) do
-    Hawk.Client.authenticate(headers, ticket, artifacts)
+  def handle_resp({:ok, {{_, status, _}, headers, body}}, result) do
+    Hawk.Client.authenticate(headers, result)
     %{status: status, result: Jason.decode!(body, keys: &mixed_keys/1)}
   end
 

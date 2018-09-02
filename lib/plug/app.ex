@@ -10,12 +10,12 @@ defmodule Plug.Oz.App do
   end
 
   def call(conn, options) when is_list(options), do: call(conn, Map.new(options))
-  def call(conn, %{encryption_password: password, load_app_fn: load_app_fn} = options) when is_binary(password) and is_function(load_app_fn) do
-    options = Map.merge(%{hawk: %{}, ticket: %{}}, options)
+  def call(conn, %{encryption_password: password, config: config} = options) when is_binary(password) do
+    options = Map.merge(%{ticket: %{}}, options)
 
     conn
     |> Hawk.Request.new()
-    |> Hawk.Server.authenticate(load_app_fn, options)
+    |> Hawk.Server.authenticate(config, options)
     |> case do
          {:error, {status, msg}} ->
            conn

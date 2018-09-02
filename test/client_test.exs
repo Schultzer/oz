@@ -1,10 +1,27 @@
 defmodule OzClientTest do
   use ExUnit.Case
 
+  defmodule Config do
+    use Oz.Config
+
+    def get_credentials("social", _opts) do
+      %{id: "social", scope: ["a", "b", "c"], key: "werxhqb98rpaxn39848xrunpaw3489ruxnpa98w4rxn", algorithm: :sha256}
+    end
+    def get_credentials("network", _opts) do
+      %{id: "network", scope: ["b", "x"], key: "witf745itwn7ey4otnw7eyi4t7syeir7bytise7rbyi", algorithm: :sha256}
+    end
+
+    def get_app(id), do: get_credentials(id, %{})
+
+    def get_grant(_id) do
+      %{grant: %{id: "a1b2c3d4e5f6g7h8i9j0", app: "social", user: "john", exp: Hawk.Now.msec() + :timer.minutes(1)}, ext: %{}}
+    end
+  end
+
   setup do
     app = %{id: "social", scope: ["a", "b", "c"], key: "werxhqb98rpaxn39848xrunpaw3489ruxnpa98w4rxn", algorithm: "sha256"}
     options = %{encryption_password: "passwordpasswordpasswordpasswordpasswordpasswordpasswordpasswordpasswordpassword",
-                load_app_fn: fn (_id) -> app end,
+                config: Config,
                 ticket: %{ttl: 10 * 60 * 1000, iron: Iron.defaults()},
                 hawk: %{}}
     [app: app, bypass: Bypass.open(), options: options, password: "a_password_that_is_not_too_short_and_also_not_very_random_but_is_good_enough"]
@@ -13,7 +30,7 @@ defmodule OzClientTest do
   describe "header/3" do
     test "generates header" do
       app = %{id: "social", scope: ["a", "b", "c"], key: "werxhqb98rpaxn39848xrunpaw3489ruxnpa98w4rxn", algorithm: :sha256}
-      assert Map.keys(Oz.Client.header("http://example.com/oz/app", :post, app)) == [:artifacts, :header]
+      assert %{artifacts: _, credentials: _, header: _} = Oz.Client.header("http://example.com/oz/app", :post, app)
     end
   end
 
@@ -120,10 +137,6 @@ defmodule OzClientTest do
 
       Process.sleep(30)
       client = Oz.Client.request(client, "/resource", method: :post)
-      # IO.inspect client
-      # IO.inspect ticket1
-      # IO.inspect client.ticket
-
       assert client.result == "POST /resource"
       assert client.ticket !== ticket1
     end

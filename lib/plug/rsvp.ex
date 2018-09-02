@@ -15,7 +15,7 @@ defmodule Plug.Oz.RSVP do
     |> Conn.resp(400, "Invalid request payload: rsvp is not allowed to be empty")
     |> Conn.halt()
   end
-  def call(conn, %{encryption_password: password, rsvp: rsvp} = options) when is_binary(password) and is_binary(password) do
+  def call(conn, %{encryption_password: password, rsvp: rsvp} = options) when is_binary(password) and is_binary(rsvp) do
     options = Map.merge(%{ticket: %{}}, options)
 
     conn
@@ -73,23 +73,21 @@ defmodule Plug.Oz.RSVP do
   defp validate({:error, {_status, "Incorrect number of sealed components"}}, _ticket, _now, _options), do: {:error, {403, "Incorrect number of sealed components"}}
   defp validate({:error, reason}, _ticket, _now, _options),                                             do: {:error, reason}
   defp validate(%{exp: exp, app: app}, %{app: app}, now, _options) when exp <= now,                     do: {:error, {403, "Expired rsvp"}}
-  defp validate(%{grant: grant, app: app}, %{app: app}, now, %{encryption_password: password, ticket: ticket, load_app_fn: load_app_fn, load_grant_fn: load_grant_fn}) when is_function(load_app_fn) and is_function(load_grant_fn) do
-    case load_grant_fn.(grant) do
+  defp validate(%{grant: grant, app: app}, %{app: app}, now, %{encryption_password: password, ticket: ticket, config: config}) do
+    case config.get_grant(grant) do
       %{grant: %{exp: exp}} when exp <= now              -> {:error, {403, "Invalid grant"}}
 
       %{grant: %{app: grant_app}} when grant_app !== app -> {:error, {403, "Invalid grant"}}
 
-      %{grant: %{app: app} = grant}                      ->
-       app
-       |> load_app_fn.()
-       |> case do
-            %{id: _} = app -> {:ok, Oz.Ticket.issue(app, grant, password, Map.merge(ticket, Map.take(grant, [:ext])))}
+      %{grant: %{app: app, exp: _} = grant, ext: ext}                     ->
+        case config.get_app(app) do
+          %{id: _} = app -> {:ok, Oz.Ticket.issue(app, grant, password, Map.merge(ticket, %{ext: ext}))}
 
-            _              -> {:error, {403, "Invalid application"}}
-          end
+          _              -> {:error, {403, "Invalid application"}}
+        end
 
 
-       _                                                 -> {:error, {403, "Invalid grant"}}
+       _                                       -> {:error, {403, "Invalid grant"}}
     end
   end
   defp validate(_rsvp, _ticket, _now, _options), do: {:error, {403, "Mismatching ticket and rsvp apps"}}

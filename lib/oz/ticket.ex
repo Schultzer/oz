@@ -3,34 +3,6 @@ defmodule Oz.Ticket do
   Documentation for Oz.
   """
 
-  @typedoc """
-  `:exp`       Time in msec
-  `:app`       App id ticket is issued to
-  `:scope`     Ticket scope
-  `:grant`     Grant id
-  `:user`      User id
-  `:dlg`       App id of the delegating party
-  `:key`       Ticket secret key (Hawk)
-  `:algorithm` Ticket hmac algorithm (Hawk)
-  `:id`        Ticket key id (Hawk)
-  `:ext`       Application data `:public` `:private`
-  """
-  @type t :: %{exp: pos_integer(), app: binary(), scope: [binary(), ...], grant: binary(), user: binary(), dlg: boolean(), key: binary(), algorithm: atom(), id: binary(), ext: map()}
-
-  @typedoc """
-  `:id`   Application id
-  `scope` Application scope
-  """
-  @type app :: %{id: binary(), scope: [binary(), ...]}
-
-  @typedoc """
-  `:id`   Persistent identifier used to issue additional tickets or revoke access
-  `:user` User id
-  `:exp`  Grant expiration
-  `scope` Grant scope
-  """
-  @type grant :: %{id: binary(), user: binary, exp: pos_integer(), scope: [binary(), ...]}
-
   @defaults %{ticket_ttl: :timer.hours(1), rsvp_ttl: :timer.minutes(1), key_bytes: 32, hmac_algorithm: :sha256}
 
   @doc """
@@ -46,7 +18,7 @@ defmodule Oz.Ticket do
 
 
   @doc """
-  Issues a new ticket for an map cointaing `:app` `Oz.Ticket.app()` or `:app` and `:grant` `Oz.Ticket.grant()`
+  Issues a new ticket.
 
   Options
     * `:ttl` time to live defualts to `:timer.hours(1)`
@@ -73,7 +45,7 @@ defmodule Oz.Ticket do
   end
 
   @doc """
-  Issues a new ticket for an map cointaing `:app` `Oz.Ticket.app()` or `:app` and `:grant` `Oz.Ticket.grant()`
+  Issues a new ticket.
 
   Options
     * `:ttl` time to live defualts to `:timer.hours(1)`
@@ -112,7 +84,7 @@ defmodule Oz.Ticket do
   end
 
   @doc """
-  Reissue a `Oz.Ticket.t()`
+  Reissue a ticket.
 
   Options
     * `:ttl` time to live defualts to `:timer.hours(1)`
@@ -133,7 +105,6 @@ defmodule Oz.Ticket do
   """
   @spec reissue(map(), binary(), keyword() | map()) :: map() | {:error, binary()}
   def reissue(parent_ticket, password, options) when is_list(options),           do: reissue(parent_ticket, password, Map.new(options))
-  def reissue(_parent_ticket, password, _options) when not is_binary(password),  do: {:error, {500, "Invalid encryption password"}}
   def reissue(%{delegate: false}, _password, %{delegate: _}),                    do: {:error, {403, "Cannot override ticket delegate restriction"}}
   def reissue(%{delegate: false}, _password, %{issue_to: _}),                    do: {:error, {403, "Ticket does not allow delegation"}}
   def reissue(%{dlg: _}, _password, %{issue_to: _}),                             do: {:error, {400, "Cannot re-delegate"}}
@@ -144,17 +115,16 @@ defmodule Oz.Ticket do
   end
 
   @spec reissue(map(), map(), binary(), keyword() | map()) :: map() | {:error, binary()}
-  def reissue(parent_ticket, grant, password, options) when is_list(options),            do: reissue(parent_ticket, grant, password, Map.new(options))
-  def reissue(_parent_ticket, _grant, password, _options) when not is_binary(password),  do: {:error, {500, "Invalid encryption password"}}
-  def reissue(%{delegate: false}, _grant, _password, %{delegate: _}),                    do: {:error, {403, "Cannot override ticket delegate restriction"}}
-  def reissue(%{delegate: false}, _grant, _password, %{issue_to: _}),                    do: {:error, {403, "Ticket does not allow delegation"}}
-  def reissue(%{dlg: _}, _grant, _password, %{issue_to: _}),                             do: {:error, {400, "Cannot re-delegate"}}
-  def reissue(%{grant: grant}, %{id: id}, _password, _options) when grant !== id,        do: {:error, {500, "Parent ticket grant does not match options.grant"}}
-  def reissue(parent_ticket, grant, password, options) when is_binary(password) do
+  def reissue(parent_ticket, grant, password, options) when is_list(options), do: reissue(parent_ticket, grant, password, Map.new(options))
+  def reissue(%{delegate: false}, _grant, _password, %{delegate: _}), do: {:error, {403, "Cannot override ticket delegate restriction"}}
+  def reissue(%{delegate: false}, _grant, _password, %{issue_to: _}), do: {:error, {403, "Ticket does not allow delegation"}}
+  def reissue(%{dlg: _}, _grant, _password, %{issue_to: _}), do: {:error, {400, "Cannot re-delegate"}}
+  def reissue(%{grant: id} = parent_ticket, %{id: id} = grant, password, options) when is_binary(password) do
     options
     |> Oz.Scope.get(parent_ticket)
     |> __reissue__(parent_ticket, grant, password, options)
   end
+  def reissue(%{grant: _grant}, %{id: _id}, _password, _options), do: {:error, {500, "Parent ticket grant does not match options.grant"}}
 
   defp __reissue__({:error, _reason}, _parent_ticket, _password, %{scope: _scope}), do: {:error, {403, "New scope is not a subset of the parent ticket scope"}}
   defp __reissue__({:error, reason}, _parent_ticket, _password, _options), do: {:error, reason}
@@ -219,7 +189,6 @@ defmodule Oz.Ticket do
   def get_exp(%{ttl: ttl}), do: Hawk.Now.msec() + ttl
   def get_exp(_),           do: Hawk.Now.msec() + :timer.hours(1)
 
-
   @doc """
   The requesting application
 
@@ -233,9 +202,6 @@ defmodule Oz.Ticket do
   """
   @spec rsvp(map(), map(), binary(), keyword()) :: map() | {:error, binary()}
   def rsvp(app, grant, password, options \\ [])
-  # def rsvp(%{}, _grant, _password, _options), do: {:error, "invalid application object"}
-  # def rsvp(_app, %{}, _password, _options), do: {:error, "invalid grant object"}
-  # def rsvp(_app, _grant, password, _options) when not is_binary(password), do: {:error, "invalid encryption password"}
   def rsvp(%{id: app}, %{id: grant}, password, options) when is_binary(password) do
     exp     = Hawk.Now.msec() + Access.get(options, :ttl, :timer.minutes(1))
     options = Access.get(options, :iron, Iron.defaults())
@@ -259,7 +225,7 @@ defmodule Oz.Ticket do
   @spec generate(map(), binary(), map()) :: map()
   def generate(ticket, password, options \\ %{})
   def generate(ticket, password, options) when is_list(options), do: generate(ticket, password, Map.new(options), 0)
-  def generate(ticket, password, options) when is_map(options),  do: generate(ticket, password, options, 0)
+  def generate(ticket, password, options) when is_map(options) and is_binary(password), do: generate(ticket, password, options, 0)
 
   defp generate(ticket, password, options, 0 = pos) do
     random = Kryptiles.random_string(options[:key_bytes] || 32)
@@ -274,13 +240,12 @@ defmodule Oz.Ticket do
   end
   defp generate(ticket, password, options, 2 = pos) do
     ticket
-    |> Map.merge(%{id: Iron.seal(ticket, password, options[:iron] || Iron.defaults)})
+    |> Map.merge(%{id: Iron.seal(ticket, password, options[:iron] || Iron.defaults())})
     |> generate(password, options, pos + 1)
   end
   defp generate(ticket, _password, %{ext: %{public: public}}, 3), do: %{ticket | ext: public}
   defp generate(ticket, _password, _options, 3),                  do: Map.delete(ticket, :ext)
   defp generate(ticket, password, options, pos),                  do: generate(ticket, password, options, pos + 1)
-
 
   @doc """
   Parse ticket id
@@ -293,10 +258,8 @@ defmodule Oz.Ticket do
       iex> Oz.Ticket.parse("", "password")
       %{}
   """
-  @spec parse(binary(), binary(), keyword()) :: map() | {:error, term()}
-  def parse(id, password, options \\ [])
-  # def parse(_id, password, _options) when not is_binary(password), do: Hawk.InternalServerError.error("invalid encryption password")
-  def parse(id, password, options) when is_binary(password) do
+  @spec parse(binary(), binary(), keyword() | map()) :: map() | {:error, term()}
+  def parse(id, password, options \\ []) when is_binary(password) do
     id
     |> Iron.unseal(password, options[:iron] || Iron.defaults())
     |> case do
